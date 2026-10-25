@@ -1,0 +1,21 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Firebase secrets / generated per-developer config
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+.firebase/
+functions/node_modules/
+
+# OS
+.DS_Store

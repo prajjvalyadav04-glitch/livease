@@ -1,0 +1,113 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasProfile() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin()    { return hasProfile() && profile().role == 'admin'; }
+    function isGuard()    { return hasProfile() && profile().role == 'guard'; }
+    function isResident() { return hasProfile() && profile().role == 'resident'; }
+
+    // ---------- users ----------
+    // Roles can only be set by an admin from the Firebase console / Admin SDK.
+    // A user can create their own profile, but only as a resident, and can
+    // never change their own role afterwards.
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == 'resident'
+        && request.resource.data.name is string
+        && request.resource.data.flat is string;
+
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role;
+
+      allow delete: if false;
+    }
+
+    // ---------- notices ----------
+    match /notices/{id} {
+      allow read: if hasProfile();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------- complaints ----------
+    match /complaints/{id} {
+      allow read: if isAdmin()
+        || (hasProfile() && resource.data.residentId == request.auth.uid);
+
+      allow create: if isResident()
+        && request.resource.data.residentId == request.auth.uid
+        && request.resource.data.status == 'open'
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.description.size() <= 2000;
+
+      // Only admins move a complaint through Open -> In progress -> Resolved.
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    // ---------- visitor passes ----------
+    match /visitor_passes/{id} {
+      // Guards can look a pass up by id when they scan it.
+      allow get: if isGuard() || isAdmin()
+        || (hasProfile() && resource.data.residentId == request.auth.uid);
+
+      allow list: if isAdmin()
+        || (hasProfile() && resource.data.residentId == request.auth.uid);
+
+      allow create: if isResident()
+        && request.resource.data.residentId == request.auth.uid
+        && request.resource.data.status == 'active';
+
+      // A guard may only flip an active pass to used (single use) - they
+      // cannot edit visitor details or reactivate a used pass.
+      allow update: if isGuard()
+        && resource.data.status == 'active'
+        && request.resource.data.status == 'used'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'usedAt', 'verifiedBy']);
+
+      allow delete: if false;
+    }
+
+    // ---------- amenity bookings ----------
+    // The document id encodes amenity + date + slot, so there can be at most
+    // one booking per slot. Only `create` is allowed (no update), which means
+    // a second booking for the same slot is rejected by the rules themselves.
+    match /bookings/{bookingId} {
+      allow read: if hasProfile();
+
+      allow create: if isResident()
+        && request.resource.data.residentId == request.auth.uid
+        && bookingId == request.resource.data.amenityId + '_'
+                        + request.resource.data.date + '_'
+                        + request.resource.data.slotKey;
+
+      allow update: if false;
+
+      allow delete: if isAdmin()
+        || (hasProfile() && resource.data.residentId == request.auth.uid);
+    }
+  }
+}
